@@ -5,5 +5,4 @@ scipy
 numba
 pandas
 sympy
-stable_baselines3
 pyyaml

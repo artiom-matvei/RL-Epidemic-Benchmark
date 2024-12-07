@@ -261,6 +261,7 @@ if __name__ == "__main__":
     for seed in seeds:
         obs_norm_params = {} 
         args.seed = seed
+        args.gym_id = 'SIR_A'
         run_name = f"{args.gym_id.split('/')[-1]}__{args.exp_name}__{args.seed}__{int(time.time())}"
         print("Running", run_name)
         writer = SummaryWriter(f"runs/{run_name}")
@@ -284,7 +285,7 @@ if __name__ == "__main__":
         # envs = gym.vector.AsyncVectorEnv(
         #     [make_env(args.gym_id, args.seed + i, i, args.capture_video, run_name, vac_starts=args.vac_starts) for i in range(args.num_envs)]
         # )
-        envs = make_env(args.gym_id, args.seed, 0, args.capture_video, run_name, vac_starts=args.vac_starts)()
+        envs = make_env('SIR_A-v0', args.seed, 0, args.capture_video, run_name, vac_starts=args.vac_starts)()
 
         test_env = make_primal_env(args.gym_id, vac_starts=args.vac_starts)()
         # test_env = make_env(args.gym_id, args.seed, 0, args.capture_video, run_name)()
