@@ -140,7 +140,7 @@ def parse_args(main_args = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp-name", type=str, default="SAC",
         help="the name of this experiment")
-    parser.add_argument("--gym-id", type=str, default="SIR_A",
+    parser.add_argument("--gym-id", type=str, default="jsons/SIR_A",
         help="the id of the gym environment")
 #     parser.add_argument("--learning-rate", type=float, default=3e-4,
 #         help="the learning rate of the optimizer")
@@ -215,8 +215,13 @@ def parse_args(main_args = None):
 #     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
     return args
-#####
-if __name__ == "__main__":
+
+def main():
+    # gym.envs.registration.register(
+    #     id='SIR_A-v0',  # Ensure the ID matches the one you're using
+    #     entry_point='EpiEnv',  # Replace with the actual module and class path
+    #     kwargs={'param1': value1, 'param2': value2},  # Add any specific arguments for your environment
+    # )
     args = parse_args()
     seeds = [0,1,2,3]
     for seed in seeds:
@@ -293,6 +298,7 @@ if __name__ == "__main__":
                         self.best_total_r = total_r 
                         print("Saving Best Checkpoint:") 
                         self.model.save('runs/{}_1/model_checkpoints/'.format(run_name) )
+                return True
 
         # learning_starts = [1000, 5000, 10000]
         # target_entropies = [-env.action_space.shape[0], -2*env.action_space.shape[0], -4*env.action_space.shape[0]]
@@ -304,3 +310,8 @@ if __name__ == "__main__":
         model = SAC("MlpPolicy", env, verbose=0, tensorboard_log="runs/", learning_starts=args.learning_starts, target_entropy=-args.target_entropy_scale * env.action_space.shape[0],
                    train_freq=args.train_freq, gradient_steps=args.gradient_steps)
         model.learn(total_timesteps=args.total_timesteps, log_interval=4, callback=SummaryWriterCallback(), tb_log_name=run_name)
+
+        
+#####
+if __name__ == "__main__":
+    main()
