@@ -200,199 +200,70 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, env):
         super(Agent, self).__init__()
         self.actor_mean_sigma = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(env.observation_space.shape).prod(), 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 2*np.prod(envs.single_action_space.shape)), std=0.01),
+            layer_init(nn.Linear(64, 2*np.prod(env.action_space.shape)), std=0.01),
         )
         self.m = MultivariateNormal(
-            torch.zeros(np.prod(envs.single_action_space.shape)), 
-            torch.eye(np.prod(envs.single_action_space.shape))
+            torch.zeros(np.prod(env.action_space.shape)), 
+            torch.eye(np.prod(env.action_space.shape))
         )
 
     def get_action(self, x):
-        action_mean = self.actor_mean_sigma(x)[:np.prod(envs.single_action_space.shape)]
-        action_sigma = self.actor_mean_sigma(x)[np.prod(envs.single_action_space.shape):]
-        epsilon = m.sample()
+        actor_mean_sigma = self.actor_mean_sigma(x)
+        action_mean = actor_mean_sigma[0,:np.prod(env.action_space.shape)]
+        action_sigma = actor_mean_sigma[0,np.prod(env.action_space.shape):]
+        epsilon = self.m.sample()
         
         action = action_mean + action_sigma * epsilon 
-        # TODO: ensure action is within boundaries
-        return action, None, None, None
+		
+        # Apply the sigmoid to ensure the action is between 0 and 1
+        action = torch.sigmoid(action)
+        return action
 
-from tqdm import tqdm
-args = parse_args("--gym-id SIR_A --seed 1")
-run_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-print("Running", run_name)
-writer = SummaryWriter(f"runs/{run_name}")
-writer.add_text(
-    "hyperparameters",
-    "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-)
-
-# TRY NOT TO MODIFY: seeding
-random.seed(args.seed)
-np.random.seed(args.seed)
-torch.manual_seed(args.seed)
-torch.backends.cudnn.deterministic = args.torch_deterministic
-
-device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-
-# env setup
-envs = gym.vector.SyncVectorEnv(
-    [make_env(args.gym_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
-)
-# envs = gym.vector.AsyncVectorEnv(
-#     [make_env(args.gym_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
-# )
-test_env = make_primal_env(args.gym_id)()
-# test_env = make_env(args.gym_id, args.seed, 0, args.capture_video, run_name)()
-assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
-
-agent = Agent(envs).to(device)
+env = make_primal_env(args.gym_id)()
+agent = Agent(env)
 optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
-# ALGO Logic: Storage setup
-obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
-actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
-logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
-rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
-dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
-values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+#### FROM SCRATCH IMPLEMENTATION OF SVG
+NUM_SAMPLES = 10
+UNROLL_HORIZON = 10
+GAMMA = 0.99
+NUM_UPDATES
+# we need to store the rewards as we unroll
 
-# TRY NOT TO MODIFY: start the game
-global_step = 0
-start_time = time.time()
-next_obs = torch.Tensor(envs.reset()).to(device)
-next_done = torch.zeros(args.num_envs).to(device)
-num_updates = args.total_timesteps // args.batch_size
-ROLLOUT_HORIZON = 35
+rewards = torch.zeros((UNROLL_HORIZON, NUM_SAMPLES), requires_grad=True)
+actions = torch.zeros((UNROLL_HORIZON, NUM_SAMPLES) + env.action_space.shape)
+obs = torch.zeros((UNROLL_HORIZON, NUM_SAMPLES) + env.observation_space.shape)
 
-csv_file = open('runs/{}/records.csv'.format(run_name), 'w')
+for update in range(0, NUM_UPDATES):
+	for i in range(NUM_SAMPLES):
+		next_obs = torch.Tensor(env.reset()).unsqueeze(0) # initial state
+		for t in range(UNROLL_HORIZON):
 
-for update in tqdm(range(1, num_updates + 1)):
-    # Annealing the rate if instructed to do so.
-    if args.anneal_lr:
-        frac = 1.0 - (update - 1.0) / num_updates
-        lrnow = frac * args.learning_rate
-        optimizer.param_groups[0]["lr"] = lrnow
+			obs[t,i] = next_obs
+			# ALGO LOGIC: action logic
+			with torch.no_grad():
+				action = agent.get_action(next_obs)
+			actions[t,i] = action
+			
+			next_obs, reward, done, info = env.step(action.cpu().numpy())
+			with torch.no_grad():
+				rewards[t,i] = torch.tensor(reward, dtype=torch.float32)
+			next_obs = torch.Tensor(next_obs).unsqueeze(0)
 
-    for step in range(0, args.num_steps):
-        global_step += 1 * args.num_envs
-        obs[step] = next_obs
-        dones[step] = next_done
+	# compute policy returns
+	loss = torch.zeros((NUM_SAMPLES))
+	for t in range(UNROLL_HORIZON):
+		loss +=  GAMMA**t * rewards[t,:]
 
-        # ALGO LOGIC: action logic
-        with torch.no_grad():
-            action, _, _, _ = agent.get_action_and_value(next_obs)
-        actions[step] = action
+	mean_loss = loss.mean()
 
-        # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, reward, done, info = envs.step(action.cpu().numpy())
-        rewards[step] = torch.tensor(reward).to(device).view(-1)
-        next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-
-        for item in info:
-            if "episode" in item.keys():
-                print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
-                writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
-                writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
-                break
-
-    # bootstrap value if not done
-    with torch.no_grad():
-        returns = torch.zeros_like(rewards).to(device)
-        for t in reversed(range(args.num_steps)):
-            if t == args.num_steps - 1:
-                nextnonterminal = 1.0 - next_done
-            else:
-                nextnonterminal = 1.0 - dones[t + 1]
-            next_return = returns[t + 1]
-            returns[t] = rewards[t] + args.gamma * nextnonterminal * next_return
-
-    # flatten the batch
-    b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
-    b_logprobs = logprobs.reshape(-1)
-    b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-    b_returns = returns.reshape(-1)
-
-    # Optimizing the policy and value network
-    b_inds = np.arange(args.batch_size)
-    clipfracs = []
-    for epoch in tqdm(range(max(1, args.update_epochs))): # eventually remove epoch as we look at trajectories only once
-        np.random.shuffle(b_inds)
-        for start in range(0, args.batch_size, args.minibatch_size):
-            # TODO: do we actually need mini-batches as we look at all trajectories at once?
-            end = start + args.minibatch_size
-            mb_inds = b_inds[start:end]
-
-            mb_returns = b_returns[mb_inds]
-            pg_loss = -mb_returns
-            
-            loss = pg_loss 
-
-            optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-            optimizer.step()
-
-
-    y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-    var_y = np.var(y_true)
-    explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-
-    # TRY NOT TO MODIFY: record rewards for plotting purposes
-    writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-    writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-    writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-    writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-    writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-    writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-    writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-    writer.add_scalar("losses/explained_variance", explained_var, global_step)
-    print("SPS:", int(global_step / (time.time() - start_time)))
-    writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-
-    # PLOT POLICY
-    if args.gym_id in epi_ids and (update - 1) % args.policy_plot_interval == 0:
-        test_obs = torch.Tensor(test_env.reset())
-        env_obs = torch.Tensor(envs.reset()).to(device)
-        timestep = 0
-        total_r = 0
-        done = False
-        itv_line = []
-        while not done:
-            with torch.no_grad():
-                action_mean = agent.get_action_mean(env_obs)
-                test_action_mean = torch.mean(action_mean, 0)
-                test_action_mean = torch.clamp(test_action_mean, 0, 1)
-             
-            test_obs, r, done, _ = test_env.step(test_action_mean.cpu().numpy())
-            test_obs = torch.Tensor(test_obs)
-            itv_index = 0
-            itv_array = []
-            for itv in test_env.epi.static.interventions:
-                if not itv.is_cost:
-                    v = float(test_action_mean[itv_index])
-                    writer.add_scalar('charts/policy_{}/{}'.format(global_step, itv.name), v, timestep)
-                    itv_array.append(v)
-                    itv_index += 1
-            itv_line.append(itv_array)
-            
-            env_obs, _, _, _ = envs.step(action_mean.cpu().numpy())
-            env_obs = torch.Tensor(env_obs).to(device)
-
-            total_r += r
-            timestep += PERIOD
-            
-        line = '|'.join([str(global_step), str(total_r), str(itv_line)]) + '\n'
-        csv_file.write(line)
-        writer.add_scalar('charts/learning_curve', total_r, global_step)
-        print("At global step {}, total_rewards={}".format(global_step, total_r))
-
-csv_file.close()
-envs.close()
-writer.close()
+	optimizer.zero_grad()
+	mean_loss.backward()
+	optimizer.step()
